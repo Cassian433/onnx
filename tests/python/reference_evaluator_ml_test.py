@@ -533,6 +533,168 @@ class TestReferenceEvaluatorAiOnnxMl:
         assert_allclose(got[0], expected, atol=1e-6)
 
     @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_linear_regressor_no_intercepts(self):
+        X = make_tensor_value_info("X", TensorProto.FLOAT, [None, 2])
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, 1])
+        node = make_node(
+            "LinearRegressor",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            coefficients=[0.5, -1.0],
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([[1, 2], [3, 4]], dtype=np.float32)
+        expected = np.array([[-1.5], [-2.5]], dtype=np.float32)
+        got = ReferenceEvaluator(model).run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected)
+        self._check_ort(model, {"X": x}, atol=1e-6)
+
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32, np.int64])
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_linear_regressor_input_dtype(self, dtype):
+        X = make_tensor_value_info(
+            "X", onnx.helper.np_dtype_to_tensor_dtype(np.dtype(dtype)), [None, 2]
+        )
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, 1])
+        node = make_node(
+            "LinearRegressor",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            coefficients=[0.5, -1.0],
+            intercepts=[0.25],
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([[1, 2], [3, 4]], dtype=dtype)
+        expected_dtype = np.float64 if dtype == np.float64 else np.float32
+        expected = np.array([[-1.25], [-2.25]], dtype=expected_dtype)
+        got = ReferenceEvaluator(model).run(None, {"X": x})[0]
+        assert got.dtype == expected_dtype
+        assert_allclose(got, expected)
+        if dtype == np.float32:
+            self._check_ort(model, {"X": x}, atol=1e-6)
+
+    @pytest.mark.parametrize("post", ["SOFTMAX", "LOGISTIC", "SOFTMAX_ZERO", "PROBIT"])
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_linear_regressor_post_transform(self, post):
+        X = make_tensor_value_info("X", TensorProto.FLOAT, [None, 2])
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, 2])
+        node = make_node(
+            "LinearRegressor",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            coefficients=[0.5, 0.0, 0.0, 1.0],
+            intercepts=[0.25, -0.25],
+            targets=2,
+            post_transform=post,
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        expected_post = {
+            "SOFTMAX": [
+                [0.11920292, 0.88079708],
+                [0.26894142, 0.73105858],
+                [0.95257413, 0.04742587],
+            ],
+            "LOGISTIC": [
+                [0.5, 0.88079708],
+                [0.26894142, 0.5],
+                [0.73105858, 0.11920292],
+            ],
+            "SOFTMAX_ZERO": [[0.0, 1.0], [1.0, 0.0], [0.95257413, 0.04742587]],
+            "PROBIT": [
+                [-0.67457425, 0.67457425],
+                [-1.15053548, 1.15053548],
+                [0.0, -0.67457425],
+            ],
+        }
+        if post == "PROBIT":
+            x = np.array([[0.0, 1.0], [-0.25, 1.125], [0.5, 0.5]], dtype=np.float32)
+        else:
+            x = np.array([[-0.5, 2.25], [-2.5, 0.25], [1.5, -1.75]], dtype=np.float32)
+        expected = np.array(expected_post[post], dtype=np.float32)
+        got = ReferenceEvaluator(model).run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected, atol=1e-6)
+        self._check_ort(model, {"X": x}, atol=1e-6)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_linear_regressor_logistic_single_target(self):
+        X = make_tensor_value_info("X", TensorProto.FLOAT, [None, 2])
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, 1])
+        node = make_node(
+            "LinearRegressor",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            coefficients=[0.5, -1.0],
+            intercepts=[0.25],
+            targets=1,
+            post_transform="LOGISTIC",
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([[1, 2], [4, 1]], dtype=np.float32)
+        expected = np.array([[0.22270013], [0.7772999]], dtype=np.float32)
+        got = ReferenceEvaluator(model).run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected, atol=1e-6)
+
+    @pytest.mark.parametrize("post", ["SOFTMAX", "LOGISTIC", "SOFTMAX_ZERO", "PROBIT"])
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_tree_ensemble_regressor_post_transform(self, post):
+        X = make_tensor_value_info("X", TensorProto.FLOAT, [None, 1])
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, 2])
+        weights = [-0.25, 2.25, -1.25, 0.25]
+        if post == "PROBIT":
+            weights = [0.0, 1.0, -0.125, 1.125]
+        node = make_node(
+            "TreeEnsembleRegressor",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            n_targets=2,
+            base_values=[0.25, -0.25],
+            nodes_treeids=[0, 0, 0],
+            nodes_nodeids=[0, 1, 2],
+            nodes_featureids=[0, 0, 0],
+            nodes_modes=["BRANCH_LEQ", "LEAF", "LEAF"],
+            nodes_values=[0.0, 0.0, 0.0],
+            nodes_truenodeids=[1, 0, 0],
+            nodes_falsenodeids=[2, 0, 0],
+            target_treeids=[0, 0, 0, 0],
+            target_nodeids=[1, 1, 2, 2],
+            target_ids=[0, 1, 0, 1],
+            target_weights=weights,
+            post_transform=post,
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        opsets = [make_opsetid("", TARGET_OPSET), make_opsetid("ai.onnx.ml", 3)]
+        model = make_model_gen_version(graph, opset_imports=opsets)
+        onnx.checker.check_model(model)
+        x = np.array([[-1.0], [1.0]], dtype=np.float32)
+        expected_post = {
+            "SOFTMAX": [[0.11920292, 0.88079708], [0.26894142, 0.73105858]],
+            "LOGISTIC": [[0.5, 0.88079708], [0.26894142, 0.5]],
+            "SOFTMAX_ZERO": [[0.0, 1.0], [1.0, 0.0]],
+            "PROBIT": [[-0.67457425, 0.67457425], [-1.15053548, 1.15053548]],
+        }
+        expected = np.array(expected_post[post], dtype=np.float32)
+        got = ReferenceEvaluator(model).run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected, atol=1e-6)
+        self._check_ort(model, {"X": x}, atol=1e-6)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
     def test_linear_regressor_2(self):
         X = make_tensor_value_info("X", TensorProto.FLOAT, [None, None])
         Y = make_tensor_value_info("Y", TensorProto.FLOAT, [None, None])

@@ -5,6 +5,12 @@ from __future__ import annotations
 
 import numpy as np
 
+from onnx.reference.ops.aionnxml._common_classifier import (
+    compute_probit,
+    expit,
+    softmax,
+    softmax_zero,
+)
 from onnx.reference.ops.aionnxml._op_run_aionnxml import OpRunAiOnnxMl
 from onnx.reference.ops.aionnxml.op_tree_ensemble_helper import TreeEnsemble
 
@@ -105,5 +111,19 @@ class TreeEnsembleRegressor(OpRunAiOnnxMl):
             res[:, :] += np.array(base_values).reshape((1, -1))
 
         if post_transform in (None, "NONE"):
-            return (res,)
-        raise NotImplementedError(f"post_transform={post_transform!r} not implemented.")
+            pass
+        elif post_transform == "SOFTMAX":
+            res = softmax(res.copy())
+        elif post_transform == "LOGISTIC":
+            res = expit(res)
+        elif post_transform == "SOFTMAX_ZERO":
+            res = softmax_zero(res.copy())
+        elif post_transform == "PROBIT":
+            for i in range(res.shape[0]):
+                for j in range(res.shape[1]):
+                    res[i, j] = compute_probit(res[i, j])
+        else:
+            raise NotImplementedError(
+                f"post_transform={post_transform!r} not implemented."
+            )
+        return (res,)
