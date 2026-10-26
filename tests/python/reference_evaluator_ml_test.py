@@ -128,6 +128,72 @@ class TestReferenceEvaluatorAiOnnxMl:
         got = sess.run(None, {"X": x})[0]
         assert_allclose(got, expected)
 
+    @pytest.mark.parametrize(
+        "x, expected, attributes",
+        [
+            (
+                np.array(["a", "z", "b"], dtype=object),
+                np.array([5, -3, 7], dtype=np.int64),
+                {"default_int64": -3},
+            ),
+            (
+                np.array([[5, 1], [7, 7]], dtype=np.int64),
+                np.array([["a", "??"], ["b", "b"]], dtype=object),
+                {"default_string": "??"},
+            ),
+            (
+                np.array(["a", "z", "b"], dtype=object),
+                np.array([5, -1, 7], dtype=np.int64),
+                {},
+            ),
+            (
+                np.array([5, 1, 7], dtype=np.int64),
+                np.array(["a", "_Unused", "b"], dtype=object),
+                {},
+            ),
+            (
+                np.array([["a", "z"], ["b", "c"]]),
+                np.array([[5, -3], [7, 9]], dtype=np.int64),
+                {"default_int64": -3},
+            ),
+        ],
+        ids=[
+            "strings_to_ints",
+            "ints_to_strings",
+            "strings_to_ints_schema_default",
+            "ints_to_strings_schema_default",
+            "strings_2d",
+        ],
+    )
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_category_mapper(self, x, expected, attributes):
+        if x.dtype == np.int64:
+            input_type, output_type = TensorProto.INT64, TensorProto.STRING
+        else:
+            input_type, output_type = TensorProto.STRING, TensorProto.INT64
+        X = make_tensor_value_info("X", input_type, x.shape)
+        Y = make_tensor_value_info("Y", output_type, x.shape)
+        node = make_node(
+            "CategoryMapper",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            cats_strings=["a", "b", "c"],
+            cats_int64s=[5, 7, 9],
+            **attributes,
+        )
+        graph = make_graph([node], "ml", [X], [Y])
+        model = make_model_gen_version(
+            graph, opset_imports=[make_opsetid("ai.onnx.ml", 1)]
+        )
+        onnx.checker.check_model(model)
+        sess = ReferenceEvaluator(model)
+        got = sess.run(None, {"X": x})[0]
+        assert got.shape == x.shape
+        assert got.dtype == expected.dtype
+        assert got.tolist() == expected.tolist()
+        self._check_ort(model, {"X": x}, equal=True)
+
     @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
     def test_scaler(self):
         X = make_tensor_value_info("X", TensorProto.FLOAT, [None, None])

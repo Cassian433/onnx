@@ -9,6 +9,7 @@ __all__ = [
     "load_op",
     "ArrayFeatureExtractor",
     "Binarizer",
+    "CategoryMapper",
     "DictVectorizer",
     "FeatureVectorizer",
     "Imputer",
@@ -34,6 +35,7 @@ from onnx.reference.ops._helpers import build_registered_operators_any_domain
 from onnx.reference.ops.aionnxml._op_run_aionnxml import OpRunAiOnnxMl
 from onnx.reference.ops.aionnxml.op_array_feature_extractor import ArrayFeatureExtractor
 from onnx.reference.ops.aionnxml.op_binarizer import Binarizer
+from onnx.reference.ops.aionnxml.op_category_mapper import CategoryMapper
 from onnx.reference.ops.aionnxml.op_dict_vectorizer import DictVectorizer
 from onnx.reference.ops.aionnxml.op_feature_vectorizer import FeatureVectorizer
 from onnx.reference.ops.aionnxml.op_imputer import Imputer
