@@ -28,8 +28,11 @@ class Imputer(OpRunAiOnnxMl):
 
         if isinstance(values, list):
             values = np.array(values)
-        if len(x.shape) != 2:
-            raise TypeError(f"x must be a matrix but shape is {x.shape}")
+        shape = x.shape
+        if len(shape) == 1:
+            x = x.reshape((1, -1))
+        elif len(shape) != 2:
+            raise TypeError(f"x must have 1 or 2 dimensions but shape is {shape}")
         if values.shape[0] not in (x.shape[1], 1):
             raise TypeError(  # pragma: no cover
                 f"Dimension mismatch {values.shape[0]} != {x.shape[1]}"
@@ -44,4 +47,4 @@ class Imputer(OpRunAiOnnxMl):
                 val = values[min(i, values.shape[0] - 1)]
                 x[x[:, i] == replace, i] = val
 
-        return (x,)
+        return (x.reshape(shape),)

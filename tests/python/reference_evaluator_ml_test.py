@@ -153,6 +153,27 @@ class TestReferenceEvaluatorAiOnnxMl:
         assert_allclose(got, expected)
 
     @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    @pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float64])
+    def test_scaler_input_type(self, dtype):
+        X = make_tensor_value_info(
+            "X", onnx.helper.np_dtype_to_tensor_dtype(np.dtype(dtype)), [2, 2]
+        )
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [2, 2])
+        node1 = make_node(
+            "Scaler", ["X"], ["Y"], offset=[0.3], scale=[1.5], domain="ai.onnx.ml"
+        )
+        graph = make_graph([node1], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([[1, 2], [3, 4]], dtype=dtype)
+        expected = np.array([[1.05, 2.55], [4.05, 5.55]], dtype=np.float32)
+        self._check_ort(model, {"X": x})
+        sess = ReferenceEvaluator(model)
+        got = sess.run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
     def test_array_feature_extractor(self):
         X = make_tensor_value_info("X", TensorProto.FLOAT, [None, None])
         A = make_tensor_value_info("A", TensorProto.INT64, [None])
@@ -260,6 +281,107 @@ class TestReferenceEvaluatorAiOnnxMl:
         sess = ReferenceEvaluator(model)
         got = sess.run(None, feeds)[0]
         assert_allclose(got, expected_value, atol=1e-6)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    @pytest.mark.parametrize(
+        "inputdimensions, expected_value",
+        [
+            ([3, 2], [[1, 2, 3, 4, 5]]),
+            ([3], [[1, 2, 3]]),
+            ([2, 3], [[1, 2, 4, 5, 0]]),
+        ],
+        ids=["two_inputs", "single_input", "cut_pad"],
+    )
+    def test_feature_vectorizer_1d(self, inputdimensions, expected_value):
+        X = [
+            make_tensor_value_info("X0", TensorProto.FLOAT, [3]),
+            make_tensor_value_info("X1", TensorProto.FLOAT, [2]),
+        ]
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [1, len(expected_value[0])])
+        node1 = make_node(
+            "FeatureVectorizer",
+            [f"X{i}" for i in range(len(inputdimensions))],
+            ["Y"],
+            inputdimensions=inputdimensions,
+            domain="ai.onnx.ml",
+        )
+        graph = make_graph([node1], "ml", X[: len(inputdimensions)], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        feeds = {
+            "X0": np.array([1, 2, 3], dtype=np.float32),
+            "X1": np.array([4, 5], dtype=np.float32),
+        }
+        feeds = {f"X{i}": feeds[f"X{i}"] for i in range(len(inputdimensions))}
+        expected = np.array(expected_value, dtype=np.float32)
+        self._check_ort(model, feeds)
+        sess = ReferenceEvaluator(model)
+        got = sess.run(None, feeds)[0]
+        assert got.dtype == np.float32
+        assert got.shape == expected.shape
+        assert_allclose(got, expected)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    def test_feature_vectorizer_int64(self):
+        X = make_tensor_value_info("X", TensorProto.INT64, [1, 2])
+        Y = make_tensor_value_info("Y", TensorProto.FLOAT, [1, 2])
+        node1 = make_node(
+            "FeatureVectorizer",
+            ["X"],
+            ["Y"],
+            inputdimensions=[2],
+            domain="ai.onnx.ml",
+        )
+        graph = make_graph([node1], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([[1, 2]], dtype=np.int64)
+        expected = np.array([[1, 2]], dtype=np.float32)
+        self._check_ort(model, {"X": x})
+        sess = ReferenceEvaluator(model)
+        got = sess.run(None, {"X": x})[0]
+        assert got.dtype == np.float32
+        assert_allclose(got, expected)
+
+    @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
+    @pytest.mark.parametrize(
+        "dtype, missing, attributes",
+        [
+            (
+                np.float32,
+                np.nan,
+                {"imputed_value_floats": [9.0], "replaced_value_float": np.nan},
+            ),
+            (
+                np.int64,
+                -1,
+                {"imputed_value_int64s": [9], "replaced_value_int64": -1},
+            ),
+        ],
+        ids=["float", "int64"],
+    )
+    def test_imputer_1d(self, dtype, missing, attributes):
+        tensor_type = onnx.helper.np_dtype_to_tensor_dtype(np.dtype(dtype))
+        X = make_tensor_value_info("X", tensor_type, [3])
+        Y = make_tensor_value_info("Y", tensor_type, [3])
+        node1 = make_node(
+            "Imputer",
+            ["X"],
+            ["Y"],
+            domain="ai.onnx.ml",
+            **attributes,
+        )
+        graph = make_graph([node1], "ml", [X], [Y])
+        model = make_model_gen_version(graph, opset_imports=OPSETS)
+        onnx.checker.check_model(model)
+        x = np.array([1, missing, 3], dtype=dtype)
+        expected = np.array([1, 9, 3], dtype=dtype)
+        self._check_ort(model, {"X": x})
+        sess = ReferenceEvaluator(model)
+        got = sess.run(None, {"X": x})[0]
+        assert got.dtype == x.dtype
+        assert got.shape == (3,)
+        assert_allclose(got, expected)
 
     @pytest.mark.skipif(not ONNX_ML, reason="onnx not compiled with ai.onnx.ml")
     def test_imputer_float(self):
